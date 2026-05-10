@@ -1,0 +1,733 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Pipeline Merge Sort - Profi Animace</title>
+    <style>
+      body {
+        font-family: "Roboto", "Segoe UI", sans-serif;
+        background: #edf2f7;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        color: #333;
+        margin: 0;
+        padding: 24px 18px;
+        box-sizing: border-box;
+        min-width: 0;
+      }
+      * {
+        box-sizing: inherit;
+      }
+      h2 {
+        color: #1f3349;
+        margin: 28px 0 14px;
+        font-size: 30px;
+        line-height: 1.15;
+      }
+
+      /* Ovládací panel */
+      .controls {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        padding: 24px;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 16px 40px rgba(31, 51, 73, 0.08);
+        margin-bottom: 24px;
+        width: min(100%, 1180px);
+        justify-content: center;
+        flex-wrap: wrap;
+      }
+      input {
+        padding: 12px 14px;
+        border: 1px solid #d8dee6;
+        border-radius: 8px;
+        font-size: 16px;
+        width: min(100%, 320px);
+        flex: 1 1 260px;
+        text-align: center;
+        font-family: monospace;
+      }
+      button {
+        padding: 12px 24px;
+        cursor: pointer;
+        border: none;
+        border-radius: 8px;
+        font-weight: bold;
+        font-size: 1em;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 48px;
+        white-space: nowrap;
+      }
+      button:active {
+        transform: scale(0.98);
+      }
+      .btn-reset {
+        background: #e74c3c;
+        color: white;
+      }
+      .btn-reset:hover {
+        background: #c0392b;
+      }
+      .btn-step {
+        background: #2ecc71;
+        color: white;
+        box-shadow: 0 4px 10px rgba(46, 204, 113, 0.3);
+      }
+      .btn-step:hover {
+        background: #27ae60;
+        box-shadow: 0 6px 15px rgba(46, 204, 113, 0.4);
+      }
+      .btn-back {
+        background: #566573;
+        color: white;
+      }
+      .btn-back:hover {
+        background: #46535f;
+      }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+        box-shadow: none;
+      }
+      .clock-display {
+        font-size: 1.2em;
+        font-weight: bold;
+        color: #7f8c8d;
+        background: #f8f9fa;
+        padding: 12px 24px;
+        border-radius: 8px;
+        border: 1px solid #e4e8ee;
+        white-space: nowrap;
+      }
+
+      /* Hlavní plocha */
+      .sim-container {
+        position: relative;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 18px 48px rgba(31, 51, 73, 0.1);
+        overflow: hidden;
+        width: min(100%, 1180px);
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+        background: white;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Pipeline Merge Sort</h2>
+
+    <div class="controls">
+      <div class="clock-display">Takt: <span id="clockData">0</span></div>
+      <input
+        type="text"
+        id="inputData"
+        value="1,5,3,2,8,7,4,6,12,10,15,9,16,11,14,13"
+      />
+      <button class="btn-reset" onclick="initSim()">Reset</button>
+      <button class="btn-step" onclick="nextStep()" id="stepBtn">
+        Krok vpřed
+      </button>
+      <button class="btn-back" onclick="prevStep()" id="backBtn">
+        Krok zpět
+      </button>
+    </div>
+
+    <div class="sim-container">
+      <canvas id="simCanvas" width="1000" height="500"></canvas>
+    </div>
+
+    <script>
+      // --- KONFIGURACE VIZUALIZACE ---
+      const CONF = {
+        cellW: 16, // Šířka buňky s číslem
+        cellH: 16,
+        procW: 50, // Šířka oranžového procesoru
+        procH: 42, // Výška procesoru
+        gap: 18, // Základní mezera mezi bloky
+        startY: 92, // Základní Y souřadnice pipeline
+        inputX: 18, // Levý okraj vizuální vstupní fronty
+        firstProcX: 330, // Levý okraj prvního procesoru
+        outputGap: 28, // Mezera mezi posledním procesorem a výstupem
+        queueGap: 22,
+        slotPitch: 17,
+        animSpeed: 0.15, // Rychlost animace (0-1, čím vyšší, tím rychlejší)
+        colors: {
+          proc: "#f47c32",
+          procStroke: "#a94212",
+          q1: "#f8fbff",
+          q2: "#fbfff5",
+          groups: ["#fff4cc", "#dff3ff", "#e8f7dd", "#ffe4ec"],
+          cellStroke: "#52616f",
+          text: "#26394e",
+          muted: "#718093",
+          activeText: "#2278bd",
+          arrow: "#9aa6b2",
+          output: "#21a667",
+          canvasBg: "#ffffff",
+          lane: "#f7f9fc",
+        },
+      };
+
+      // --- LOGICKÁ TŘÍDA PROCESORU (shodná s předchozí, jen správa animací) ---
+      class Processor {
+        constructor(rank) {
+          this.rank = rank;
+          this.id = rank;
+          this.capacity = 1 << (rank - 1);
+          this.maxQLen = this.capacity;
+          this.queues = [[], []]; // Fyzické fronty (data jsou uvnitř)
+          this.q1Proc = 0;
+          this.q2Proc = 0;
+          this.currentQId = 0;
+          this.state = "WAIT_Q1";
+        }
+
+        receive(val, tag) {
+          this.queues[tag].push(val);
+        }
+
+        // Vrací, kam má nový prvek do této pipeline vstoupit (pro start animace)
+        getInputPos(tag) {
+          let tagY = getQueueY(tag);
+          // X pozice je na začátku vizuálního slotu fronty (vlevo)
+          let procX = getProcX(this.rank);
+          return { x: procX - CONF.queueGap, y: tagY };
+        }
+
+        // Vrací statickou pozici buňky ve frontě (pro cíl animace)
+        getQueueCellPos(tag, index) {
+          let procX = getProcX(this.rank);
+          let tagY = getQueueY(tag);
+          // Index 0 je nejblíže procesoru (vpravo)
+          return { x: procX - CONF.queueGap - index * CONF.slotPitch, y: tagY };
+        }
+
+        work() {
+          let Q1 = this.queues[this.currentQId % 2];
+          let Q2 = this.queues[(this.currentQId + 1) % 2];
+          let res = null;
+
+          if (this.state === "WAIT_Q1" && Q1.length >= this.maxQLen)
+            this.state = "WAIT_Q2_FIRST";
+          if (this.state === "WAIT_Q2_FIRST" && Q2.length >= 1)
+            this.state = "MERGING";
+
+          if (this.state === "MERGING") {
+            if (this.q1Proc < this.maxQLen && this.q2Proc < this.maxQLen) {
+              if (Q1[0] > Q2[0]) {
+                res = Q1.shift();
+                this.q1Proc++;
+              } else {
+                res = Q2.shift();
+                this.q2Proc++;
+              }
+            } else {
+              this.state = "FLUSH_REST";
+            }
+          }
+
+          if (
+            this.state === "FLUSH_REST" ||
+            (this.state === "MERGING" && res === null)
+          ) {
+            if (this.q1Proc < this.maxQLen && Q1.length > 0) {
+              res = Q1.shift();
+              this.q1Proc++;
+            } else if (this.q2Proc < this.maxQLen && Q2.length > 0) {
+              res = Q2.shift();
+              this.q2Proc++;
+            }
+
+            if (this.q1Proc === this.maxQLen && this.q2Proc === this.maxQLen) {
+              this.q1Proc = 0;
+              this.q2Proc = 0;
+              this.currentQId++;
+              this.state = "WAIT_Q1";
+            }
+          }
+          return res;
+        }
+      }
+
+      // --- TŘÍDA PRO ANIMOVANÝ PRVEK (Traveling Particle) ---
+      class Particle {
+        constructor(val, startX, startY, endX, endY, onComplete) {
+          this.val = val;
+          this.x = startX;
+          this.y = startY;
+          this.endX = endX;
+          this.endY = endY;
+          this.onComplete = onComplete; // Callback po dojezdu
+          this.completed = false;
+        }
+
+        update() {
+          if (this.completed) return;
+          // Lineární interpolace (LERP) pro plynulý pohyb
+          let dx = this.endX - this.x;
+          let dy = this.endY - this.y;
+          this.x += dx * CONF.animSpeed;
+          this.y += dy * CONF.animSpeed;
+
+          // Pokud jsme blízko cíle, snapneme a ukončíme
+          if (Math.abs(dx) < 1 && Math.abs(dy) < 1) {
+            this.x = this.endX;
+            this.y = this.endY;
+            this.completed = true;
+            if (this.onComplete) this.onComplete(this.val);
+          }
+        }
+
+        draw(ctx) {
+          drawCell(
+            ctx,
+            this.x,
+            this.y,
+            this.val,
+            "white",
+            CONF.colors.activeText,
+            CONF.colors.activeText,
+          );
+        }
+      }
+
+      // --- GLOBÁLNÍ STAV SIMULACE ---
+      let procs = [];
+      let inputQueue = []; // Čistě vizuální zobrazení zbývajícího vstupu
+      let logicInputData = []; // Data pro logiku
+      let finalOutput = [];
+      let particles = []; // Seznam aktuálně běžících animací
+      let clockCount = 0;
+      let isAnimating = false;
+      let inputCountOrig = 0;
+      let history = [];
+
+      function getProcX(rank) {
+        let x = CONF.firstProcX;
+        for (let r = 2; r <= rank; r++) {
+          x += CONF.procW + CONF.gap + getDisplaySlots(r) * CONF.slotPitch;
+        }
+        return x;
+      }
+
+      function getDisplaySlots(rank) {
+        const queueSize = 1 << (rank - 1);
+        return Math.max(2, Math.ceil(queueSize * 1.5));
+      }
+
+      function getGroupColor(groupIndex) {
+        return CONF.colors.groups[groupIndex % CONF.colors.groups.length];
+      }
+
+      function getGroupedFill(baseColor, rank, indexFromProcessor) {
+        const groupIndex = Math.floor(indexFromProcessor / (1 << (rank - 1)));
+        return getGroupColor(groupIndex) || baseColor;
+      }
+
+      function getQueueY(tag) {
+        return tag === 0 ? CONF.startY - 11 : CONF.startY + 11;
+      }
+
+      function getOutputX() {
+        if (procs.length === 0)
+          return CONF.firstProcX + CONF.procW + CONF.outputGap;
+        return getProcX(procs.length) + CONF.procW + CONF.outputGap;
+      }
+
+      function getReceiveTag(proc) {
+        const receivedTotal =
+          proc.queues[0].length +
+          proc.queues[1].length +
+          proc.q1Proc +
+          proc.q2Proc +
+          proc.currentQId * 2 * proc.maxQLen;
+        return Math.floor(receivedTotal / proc.maxQLen) % 2;
+      }
+
+      function resizeCanvas() {
+        const canvas = document.getElementById("simCanvas");
+        canvas.width = 1168;
+        canvas.height = 160;
+      }
+
+      function snapshotState() {
+        return {
+          procs: procs.map((p) => ({
+            rank: p.rank,
+            id: p.id,
+            capacity: p.capacity,
+            maxQLen: p.maxQLen,
+            queues: p.queues.map((q) => [...q]),
+            q1Proc: p.q1Proc,
+            q2Proc: p.q2Proc,
+            currentQId: p.currentQId,
+            state: p.state,
+          })),
+          inputQueue: [...inputQueue],
+          logicInputData: [...logicInputData],
+          finalOutput: [...finalOutput],
+          clockCount,
+          inputCountOrig,
+        };
+      }
+
+      function restoreState(snapshot) {
+        procs = snapshot.procs.map((saved) => {
+          const p = new Processor(saved.rank);
+          p.id = saved.id;
+          p.capacity = saved.capacity;
+          p.maxQLen = saved.maxQLen;
+          p.queues = saved.queues.map((q) => [...q]);
+          p.q1Proc = saved.q1Proc;
+          p.q2Proc = saved.q2Proc;
+          p.currentQId = saved.currentQId;
+          p.state = saved.state;
+          return p;
+        });
+        inputQueue = [...snapshot.inputQueue];
+        logicInputData = [...snapshot.logicInputData];
+        finalOutput = [...snapshot.finalOutput];
+        clockCount = snapshot.clockCount;
+        inputCountOrig = snapshot.inputCountOrig;
+        particles = [];
+        isAnimating = false;
+        document.getElementById("clockData").innerText = clockCount;
+        updateButtons();
+        resizeCanvas();
+        draw();
+      }
+
+      function updateButtons() {
+        document.getElementById("stepBtn").disabled = isAnimating;
+        document.getElementById("backBtn").disabled =
+          isAnimating || history.length === 0;
+      }
+
+      function initSim() {
+        particles = [];
+        isAnimating = false;
+        clockCount = 0;
+        history = [];
+        document.getElementById("clockData").innerText = clockCount;
+
+        let data = document
+          .getElementById("inputData")
+          .value.split(",")
+          .map(Number);
+        logicInputData = [...data];
+        inputQueue = [...data];
+        inputCountOrig = data.length;
+        let numProcs = Math.log2(inputCountOrig);
+        procs = [];
+        for (let i = 0; i < numProcs; i++) procs.push(new Processor(i + 1));
+        finalOutput = [];
+        resizeCanvas();
+        updateButtons();
+        draw();
+      }
+
+      function nextStep() {
+        if (isAnimating) return; // Zákaz klikání během animace
+        history.push(snapshotState());
+        isAnimating = true;
+        updateButtons();
+        clockCount++;
+        document.getElementById("clockData").innerText = clockCount;
+
+        // Jeden takt: procesory nejdřív pracují se stavem na začátku kroku,
+        // doručení nových hodnot proběhne až potom.
+        let movingValues = procs.map((p) => p.work());
+
+        if (logicInputData.length > 0) {
+          let sourceIndex = logicInputData.length - 1;
+          let tag = (inputCountOrig - logicInputData.length) % 2;
+          let val = logicInputData.pop();
+          let p1Input = procs[0].getInputPos(tag);
+
+          // Čelo vstupu je vpravo: bere se poslední viditelné políčko.
+          let particle = new Particle(
+            val,
+            CONF.inputX + sourceIndex * CONF.slotPitch + CONF.cellW / 2,
+            CONF.startY,
+            p1Input.x,
+            p1Input.y,
+            (v) => {
+              inputQueue.pop();
+              procs[0].receive(v, tag);
+              checkAnimationEnd();
+            },
+          );
+          particles.push(particle);
+        }
+
+        for (let i = 0; i < procs.length; i++) {
+          let val = movingValues[i];
+          if (val !== null) {
+            let startX = getProcX(i + 1) + CONF.procW;
+            let startY = CONF.startY;
+
+            if (i === procs.length - 1) {
+              // Výstup z posledního jede do výstupního pole
+              let particle = new Particle(
+                val,
+                startX,
+                startY,
+                getOutputX() + CONF.cellW / 2,
+                CONF.startY,
+                (v) => {
+                  finalOutput.unshift(v); // Nový výstup se přidává zleva
+                  checkAnimationEnd();
+                },
+              );
+              particles.push(particle);
+            } else {
+              let pNext = procs[i + 1];
+              let tag = getReceiveTag(pNext);
+              let nextInput = pNext.getInputPos(tag);
+
+              let particle = new Particle(
+                val,
+                startX,
+                startY,
+                nextInput.x,
+                nextInput.y,
+                (v) => {
+                  pNext.receive(v, tag);
+                  checkAnimationEnd();
+                },
+              );
+              particles.push(particle);
+            }
+          }
+        }
+
+        // Pokud nic neletí, končíme hned
+        if (particles.length === 0) {
+          isAnimating = false;
+          updateButtons();
+          draw();
+        } else {
+          animLoop();
+        }
+      }
+
+      function prevStep() {
+        if (isAnimating || history.length === 0) return;
+        restoreState(history.pop());
+      }
+
+      // Kontrola, zda všechny částice dojely
+      function checkAnimationEnd() {
+        if (particles.every((p) => p.completed)) {
+          isAnimating = false;
+          particles = [];
+          updateButtons();
+          draw(); // Finální překreslení po snapnutí
+        }
+      }
+
+      // Hlavní animační smyčka (Canvas refresh)
+      function animLoop() {
+        if (!isAnimating) return;
+        draw();
+        particles.forEach((p) => p.update());
+        requestAnimationFrame(animLoop);
+      }
+
+      function roundedRect(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.roundRect(x, y, w, h, r);
+        ctx.fill();
+        ctx.stroke();
+      }
+
+      function drawCell(
+        ctx,
+        x,
+        y,
+        value,
+        fill,
+        stroke,
+        color = CONF.colors.text,
+      ) {
+        const left = x - CONF.cellW / 2;
+        const top = y - CONF.cellH / 2;
+
+        ctx.fillStyle = fill;
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = 1.4;
+        ctx.fillRect(left, top, CONF.cellW, CONF.cellH);
+        ctx.strokeRect(left, top, CONF.cellW, CONF.cellH);
+
+        if (value !== undefined) {
+          ctx.fillStyle = color;
+          ctx.font = "bold 11px monospace";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(value, x, y + 1);
+          ctx.textAlign = "start";
+          ctx.textBaseline = "alphabetic";
+        }
+      }
+
+      function drawGroupDivider(ctx, x, y) {
+        ctx.strokeStyle = "#1f3349";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(x, y - CONF.cellH / 2 - 2);
+        ctx.lineTo(x, y + CONF.cellH / 2 + 2);
+        ctx.stroke();
+      }
+
+      function drawProcessor(ctx, x, y, label, state) {
+        const top = y - CONF.procH / 2;
+
+        ctx.fillStyle = CONF.colors.proc;
+        ctx.strokeStyle = CONF.colors.procStroke;
+        ctx.lineWidth = 1.6;
+        ctx.fillRect(x, top, CONF.procW, CONF.procH);
+        ctx.strokeRect(x, top, CONF.procW, CONF.procH);
+
+        ctx.fillStyle = "white";
+        ctx.font = "bold 17px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, x + CONF.procW / 2, y - 4);
+        ctx.fillStyle = "rgba(255,255,255,0.78)";
+        ctx.font = "bold 6px sans-serif";
+        ctx.fillText(state, x + CONF.procW / 2, y + 14);
+        ctx.textAlign = "start";
+        ctx.textBaseline = "alphabetic";
+      }
+
+      function drawArrow(ctx, fromX, y, toX) {
+        ctx.strokeStyle = CONF.colors.arrow;
+        ctx.fillStyle = CONF.colors.arrow;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(fromX, y);
+        ctx.lineTo(toX, y);
+        ctx.stroke();
+      }
+
+      // --- VYKRESLOVÁNÍ CANVASU ---
+      function draw() {
+        const canvas = document.getElementById("simCanvas");
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.lineWidth = 1;
+
+        ctx.fillStyle = CONF.colors.canvasBg;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = CONF.colors.lane;
+        ctx.fillRect(12, 48, canvas.width - 24, 80);
+
+        // Vizuální vstupní fronta: čelo je vpravo, bere se pravé krajní číslo.
+        for (let i = 0; i < inputCountOrig; i++) {
+          let xPos = CONF.inputX + i * CONF.slotPitch + CONF.cellW / 2;
+          // Číslo vykreslíme jen pokud zbývá ve vizuální frontě
+          drawCell(
+            ctx,
+            xPos,
+            CONF.startY,
+            inputQueue[i],
+            "white",
+            CONF.colors.cellStroke,
+          );
+        }
+
+        // 2. PROCESORY A JEJICH STATICKÉ FRONTY
+        procs.forEach((p, i) => {
+          let x = getProcX(i + 1);
+          let y = CONF.startY;
+
+          // "Dráty" (šipky)
+          const laneStart = Math.max(
+            26,
+            x -
+              CONF.queueGap -
+              getDisplaySlots(p.rank) * CONF.slotPitch -
+              CONF.cellW / 2,
+          );
+          drawArrow(ctx, laneStart, getQueueY(0), x - 3, getQueueY(0));
+          drawArrow(ctx, laneStart, getQueueY(1), x - 3, getQueueY(1));
+
+          // Tělo procesoru
+          drawProcessor(ctx, x, y, "P" + p.id, p.state);
+
+          // Vykreslení statických front (toho, co už dorazilo a sedí v paměti)
+          const drawStaticQueue = (q, tag, color) => {
+            const groupSize = 1 << (p.rank - 1);
+            for (let j = 0; j < getDisplaySlots(p.rank); j++) {
+              let qX = x - CONF.queueGap - j * CONF.slotPitch;
+              let fill = getGroupedFill(color, p.rank, j);
+              if (j > 0 && j % groupSize === 0) {
+                drawGroupDivider(
+                  ctx,
+                  qX + CONF.cellW / 2 + (CONF.slotPitch - CONF.cellW) / 2,
+                  getQueueY(tag),
+                );
+              }
+              drawCell(
+                ctx,
+                qX,
+                getQueueY(tag),
+                q[j],
+                fill,
+                CONF.colors.cellStroke,
+              );
+            }
+          };
+          drawStaticQueue(p.queues[0], 0, CONF.colors.q1);
+          drawStaticQueue(p.queues[1], 1, CONF.colors.q2);
+        });
+
+        // 3. VÝSTUPNÍ POLE
+        ctx.fillStyle = CONF.colors.text;
+        ctx.font = "bold 11px sans-serif";
+        const outputX = getOutputX();
+        // Nový výstup se přidává zleva, starší hodnoty se posouvají doprava.
+        for (let i = 0; i < inputCountOrig; i++) {
+          let xPos = outputX + i * CONF.slotPitch + CONF.cellW / 2;
+          drawCell(
+            ctx,
+            xPos,
+            CONF.startY,
+            undefined,
+            "white",
+            CONF.colors.cellStroke,
+          );
+        }
+        finalOutput.forEach((d, i) => {
+          let xPos = outputX + i * CONF.slotPitch + CONF.cellW / 2;
+          drawCell(
+            ctx,
+            xPos,
+            CONF.startY,
+            d,
+            "#ecfdf3",
+            CONF.colors.output,
+            CONF.colors.output,
+          );
+        });
+
+        // 4. ANIMOVANÉ ČÁSTICE (Vykreslují se přes všechno ostatní)
+        particles.forEach((p) => p.draw(ctx));
+      }
+
+      // Start
+      initSim();
+    </script>
+  </body>
+</html>
